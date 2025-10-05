@@ -1,12 +1,38 @@
 #include "driver/rmt.h"
-#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #define RMT_CHANNEL    RMT_CHANNEL_0
-#define GPIO_OUT       18
-#define CLK_DIV        1           // 80 MHz base clock
-#define TICK_US        (1.0 / 80)  // 12.5 ns per tick
-#define PERIOD_US      10          // 10 µs period = 100 kHz
-#define PERIOD_TICKS   (uint16_t)(PERIOD_US / TICK_US)  // ~800 ticks
+#define GPIO_OUT       8
+#define CLK_DIV        80
+#define HIGH_US        500 * 5000      // HIGH duration = 500 µs
+#define LOW0_US        250 * 5000      // LOW for bit 0 = 250 µs
+#define LOW1_US        750 * 5000      // LOW for bit 1 = 750 µs
+
+// Fill one RMT item for a bit
+void fill_psk_bit(rmt_item32_t* item, int bit) {
+    item->level0 = 1;
+    item->duration0 = HIGH_US;
+    item->level1 = 0;
+    item->duration1 = (bit) ? LOW1_US : LOW0_US;
+}
+
+// Send a string using this PSK-style encoding
+void send_psk_string(char * data, size_t len) 
+{
+    rmt_item32_t items[len * 8];  // 8 bits per char
+
+    int idx = 0;
+    for (size_t i = 0; i < len; i++) {
+        for (int b = 7; b >= 0; b--) {  // MSB first
+            int bit = (data[i] >> b) & 1;
+            fill_psk_bit(&items[idx], bit);
+            idx++;
+        }
+    }
+
+    rmt_write_items(RMT_CHANNEL, items, idx, true); // blocking for simplicity
+}
 
 void app_main(void)
 {
@@ -26,33 +52,9 @@ void app_main(void)
     rmt_config(&config);
     rmt_driver_install(RMT_CHANNEL, 0, 0);
 
-    rmt_item32_t item;
-
+    char str[] = {0b10100100};
     while (1) {
-        // 70% duty (nominal)
-        uint16_t high_ticks = (uint16_t)(PERIOD_TICKS * 0.7);
-        uint16_t low_ticks  = PERIOD_TICKS - high_ticks;
-        item.duration0 = high_ticks;
-        item.level0 = 1;
-        item.duration1 = low_ticks;
-        item.level1 = 0;
-        rmt_write_items(RMT_CHANNEL, &item, 1, true);
-
-        // simulate a phase shift modulation: move falling edge ±10%
-        high_ticks = (uint16_t)(PERIOD_TICKS * 0.6); // phase advanced
-        low_ticks  = PERIOD_TICKS - high_ticks;
-        item.duration0 = high_ticks;
-        item.level0 = 1;
-        item.duration1 = low_ticks;
-        item.level1 = 0;
-        rmt_write_items(RMT_CHANNEL, &item, 1, true);
-
-        high_ticks = (uint16_t)(PERIOD_TICKS * 0.8); // phase delayed
-        low_ticks  = PERIOD_TICKS - high_ticks;
-        item.duration0 = high_ticks;
-        item.level0 = 1;
-        item.duration1 = low_ticks;
-        item.level1 = 0;
-        rmt_write_items(RMT_CHANNEL, &item, 1, true);
+        send_psk_string(str, sizeof(str));
+        vTaskDelay(pdMS_TO_TICKS(1000)); // wait 1s between sends
     }
 }
